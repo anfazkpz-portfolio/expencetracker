@@ -9,6 +9,7 @@ import {
 import { formatDateDDMMYYYY } from '@/lib/utils';
 
 export const dynamic = 'force-dynamic';
+export const revalidate = 0;
 
 const SYSTEM_PROMPT = `You are a concise, professional Personal Finance AI Assistant for Cash Manager.
 You have access to tools that query the user's live Supabase database and external live funds.
