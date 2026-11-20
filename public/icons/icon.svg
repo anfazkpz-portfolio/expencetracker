@@ -1,7 +1,33 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512" width="512" height="512">
-  <rect width="512" height="512" rx="110" fill="#09090b"/>
-  <circle cx="256" cy="256" r="160" fill="none" stroke="#10b981" stroke-width="14" stroke-dasharray="14 14" opacity="0.6"/>
-  <text x="50%" y="54%" text-anchor="middle" dominant-baseline="central" font-family="system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif" font-size="240" font-weight="bold" fill="#ffffff">₹</text>
-  <circle cx="360" cy="150" r="22" fill="#10b981"/>
-</svg>
+  <defs>
+    <linearGradient id="bgGrad" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#18181b" />
+      <stop offset="100%" stop-color="#09090b" />
+    </linearGradient>
+    <linearGradient id="ringGrad" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#10b981" stop-opacity="0.8" />
+      <stop offset="100%" stop-color="#059669" stop-opacity="0.3" />
+    </linearGradient>
+  </defs>
 
+  <!-- Full bleed dark background for maskable & standard launchers -->
+  <rect width="512" height="512"  fill="url(#bgGrad)"/>
+
+  <!-- Subtle glow / ambient accent behind the emblem -->
+  <circle cx="256" cy="256" r="150" fill="#10b981" opacity="0.08" />
+
+  <!-- Outer accent ring (within safe zone) -->
+  <circle cx="256" cy="256" r="170" fill="none" stroke="url(#ringGrad)" stroke-width="8" stroke-dasharray="12 12" />
+
+  <!-- Indian Rupee Emblem Vector Path -->
+  <g transform="translate(124, 124) scale(11)" fill="none" stroke="#ffffff" stroke-width="2.4" stroke-linecap="round" stroke-linejoin="round">
+    <path d="M6 3h12" />
+    <path d="M6 8h12" />
+    <path d="m6 13 8.5 8" />
+    <path d="M6 13h3" />
+    <path d="M9 13c6.667 0 6.667-10 0-10" />
+  </g>
+
+  <!-- Modern Live Accent Dot -->
+  <circle cx="360" cy="148" r="18" fill="#10b981" stroke="#09090b" stroke-width="4"/>
+</svg>

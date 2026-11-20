@@ -21,6 +21,7 @@ import { clearAllOfflineData } from '@/lib/offline/db';
 
 interface BalanceBreakdown {
   mainBalance: number;
+  myCash: number;
   roomFund: number;
   itLabFund: number;
   storeFund: number;
@@ -36,7 +37,7 @@ export function GrandTotalCashWidget() {
     isLoading: txsLoading,
     isFetching: txsFetching,
     refetch: refetchTxs,
-  } = useTransactions(250);
+  } = useTransactions(1000);
 
   const {
     data: swiggy = [],
@@ -57,7 +58,7 @@ export function GrandTotalCashWidget() {
   const isRefreshing = txsFetching || swiggyFetching || fundsFetching;
 
   const balances: BalanceBreakdown = useMemo(() => {
-    // 1. Calculate Main App Balance
+    // 1. Calculate My Cash (Personal Net Balance from transactions & Swiggy)
     const txIncome = txs
       .filter((t) => t.type === 'income')
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
@@ -77,18 +78,19 @@ export function GrandTotalCashWidget() {
       .filter((t) => t.type === 'expense')
       .reduce((sum, t) => sum + Number(t.amount || 0), 0);
 
-    const mainBalance = totalIncome - txExpense;
+    const myCash = totalIncome - txExpense;
 
-    // 2. Parse external fund amounts (strip currency symbols and commas)
+    // 2. Parse external fund amounts (keep external funds 100% untouched)
     const roomFund = parseCurrencyToNumber(fundsRes?.roomFund?.amount);
     const itLabFund = parseCurrencyToNumber(fundsRes?.itLabFund?.amount);
     const storeFund = parseCurrencyToNumber(fundsRes?.storeFund?.amount);
 
-    // 3. Grand Total Sum
-    const grandTotal = mainBalance + roomFund + itLabFund + storeFund;
+    // 3. Grand Total Sum: Store Fund + IT Lab Fund + Room Fund + My Cash
+    const grandTotal = storeFund + itLabFund + roomFund + myCash;
 
     return {
-      mainBalance,
+      mainBalance: myCash,
+      myCash,
       roomFund,
       itLabFund,
       storeFund,
@@ -210,19 +212,19 @@ export function GrandTotalCashWidget() {
           </div>
         ) : (
           <div className="grid grid-cols-2 gap-2 sm:grid-cols-4">
-            {/* 1. Main Application Cash Balance */}
+            {/* 1. My Cash (Personal Net Balance) */}
             <CardMotion className="rounded-xl border border-neutral-200/80 bg-white p-2.5 sm:p-3 shadow-2xs">
               <div className="flex items-center justify-between">
                 <span className="text-[10px] font-medium text-neutral-500 truncate">
-                  Main Cash
+                  My Cash
                 </span>
                 <Wallet className="h-3 w-3 text-neutral-400" />
               </div>
-              <div className="mt-1 text-sm sm:text-base font-bold text-neutral-900 tracking-tight">
-                {formatCurrency(balances.mainBalance)}
+              <div className={`mt-1 text-sm sm:text-base font-bold tracking-tight ${balances.myCash < 0 ? 'text-rose-600' : 'text-neutral-900'}`}>
+                {formatCurrency(balances.myCash)}
               </div>
-              <span className="text-[9px] text-neutral-400 block truncate">
-                Liquid Balance
+              <span className="text-[9px] text-neutral-400 block truncate" title="Personal net balance">
+                Personal net balance
               </span>
             </CardMotion>
 
@@ -253,8 +255,8 @@ export function GrandTotalCashWidget() {
               <div className="mt-1 text-sm sm:text-base font-bold text-neutral-900 tracking-tight">
                 {formatCurrency(balances.itLabFund)}
               </div>
-              <span className="text-[9px] text-emerald-600 font-medium block truncate" title="Cash in Hand (In-Charge)">
-                Cash in Hand
+              <span className="text-[9px] text-emerald-600 font-medium block truncate" title="Lab Cash (In-Charge)">
+                Lab Cash (In-Charge)
               </span>
             </CardMotion>
 

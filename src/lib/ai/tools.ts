@@ -321,6 +321,54 @@ export async function getExternalLiveFunds() {
     result.store_fund = { amount: 1450, bank_balance: 1100, cash_balance: 350, status: 'placeholder' };
   }
 
+  // 4. Personal My Cash & Grand Total Cash calculation (Store + Lab + Room + My Cash)
+  try {
+    const [txRes, swiggyRes] = await Promise.all([
+      supabase.from('transactions').select('*'),
+      supabase.from('swiggy_income').select('*'),
+    ]);
+    const txs = txRes.data || [];
+    const swiggy = swiggyRes.data || [];
+
+    const txIncome = txs
+      .filter((t) => t.type === 'income')
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+    const swiggyNet = swiggy.reduce(
+      (sum, s) =>
+        sum +
+        (Number(s.gross_amount || 0) -
+          Number(s.deduction_amount || 0) -
+          Number(s.fuel_expense || 0)),
+      0
+    );
+    const txExpense = txs
+      .filter((t) => t.type === 'expense')
+      .reduce((sum, t) => sum + Number(t.amount || 0), 0);
+
+    const myCash = (txIncome + swiggyNet) - txExpense;
+    const storeAmt = Number(result.store_fund?.amount || 0);
+    const labAmt = Number(result.it_lab_fund?.amount || 0);
+    const roomAmt = Number(result.room_fund?.amount || 0);
+    const grandTotal = storeAmt + labAmt + roomAmt + myCash;
+
+    result.my_cash = {
+      amount: myCash,
+      label: 'My Cash (Personal net balance)',
+    };
+    result.grand_total_cash = {
+      amount: grandTotal,
+      formula: 'Store Fund + IT Lab Fund + Room Fund + My Cash',
+      breakdown: {
+        store_fund: storeAmt,
+        it_lab_fund: labAmt,
+        room_fund: roomAmt,
+        my_cash: myCash,
+      },
+    };
+  } catch (err: any) {
+    console.warn('Failed to calculate combined grand total cash:', err);
+  }
+
   return result;
 }
 

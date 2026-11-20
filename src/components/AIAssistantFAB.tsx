@@ -14,6 +14,8 @@ import {
   VolumeX,
   Radio,
   Square,
+  Globe,
+  AlertCircle,
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'framer-motion';
 
@@ -25,39 +27,72 @@ interface ChatMessage {
   toolCalls?: string[];
 }
 
-const INITIAL_MESSAGES: ChatMessage[] = [
+const INITIAL_MESSAGES_ML: ChatMessage[] = [
   {
     id: '1',
     sender: 'assistant',
-    text: "Hello! I'm your AI Cash Assistant. Ask me anything about your balance, expenses, Swiggy earnings, debts, or external live funds.",
+    text: 'ഹലോ! എന്തൊക്കെയുണ്ട് വിശേഷം? നമ്മുടെ കയ്യിലുള്ള പണം, ആകെ തുക, സ്വിഗ്ഗി വരുമാനം, കടങ്ങൾ ഒക്കെ അറിയണമെങ്കിൽ ചോദിച്ചോളൂ ട്ടോ!',
     timestamp: 'Just now',
   },
 ];
 
-const QUICK_PROMPTS = [
-  'What is my total savings this month?',
+const INITIAL_MESSAGES_EN: ChatMessage[] = [
+  {
+    id: '1',
+    sender: 'assistant',
+    text: "Hello! I'm your AI Cash Assistant. Ask me anything about My Cash, Grand Total, Swiggy earnings, debts, or external live funds. You can speak or type in Malayalam or English!",
+    timestamp: 'Just now',
+  },
+];
+
+const QUICK_PROMPTS_EN = [
+  'What is my Grand Total Cash?',
+  'What is my My Cash balance?',
   'How much did I earn from Swiggy?',
-  'Do I have any pending or overdue debts?',
   'What are the external live fund balances?',
 ];
 
+const QUICK_PROMPTS_ML = [
+  'ഇപ്പോ മൊത്തം എത്ര രൂപയുണ്ട്?',
+  'എന്റെ കയ്യിൽ സ്വന്തമായി എത്ര രൂപയുണ്ട്?',
+  'സ്വിഗ്ഗിയിൽ നിന്ന് എത്ര കിട്ടി?',
+  'കടം എന്തെങ്കിലും കൊടുക്കാനുണ്ടോ?',
+];
+
+const TOOL_LABELS_ML: Record<string, string> = {
+  get_financial_summary: 'സാമ്പത്തിക വിവരങ്ങൾ',
+  get_swiggy_details: 'സ്വിഗ്ഗി വിവരങ്ങൾ',
+  get_debts_and_dues: 'കടങ്ങളുടെ വിവരങ്ങൾ',
+  get_external_live_funds: 'തത്സമയ ഫണ്ടുകൾ',
+  get_recent_transactions: 'ഇടപാടുകൾ',
+};
+
 /**
  * Normalizes text for human-like Text-To-Speech pronunciation:
- * - Converts ₹ / Rs. into "rupees"
- * - Strips markdown asterisks, bullet points, headers, backticks
+ * - Strips commas from numbers (e.g. 16,119 -> 16119) so TTS engines don't pause awkwardly
+ * - Converts ₹ / Rs. into "രൂപ" (for Malayalam) or "rupees" (for English)
+ * - Strips markdown asterisks, bullet points, headers, backticks, pipes, colons
  * - Cleans excessive whitespace
  */
-function cleanTextForSpeech(text: string): string {
+function cleanTextForSpeech(text: string, isMalayalam: boolean): string {
   if (!text) return '';
+  const currencyWord = isMalayalam ? 'രൂപ' : 'rupees';
   return text
-    .replace(/₹\s*([0-9,.]+)/g, '$1 rupees')
-    .replace(/Rs\.?\s*([0-9,.]+)/gi, '$1 rupees')
+    // Remove commas from inside numbers e.g. 12,268 -> 12268
+    .replace(/([0-9]),([0-9])/g, '$1$2')
+    // Convert ₹ / Rs. into currency word
+    .replace(/₹\s*([0-9.]+)/g, `$1 ${currencyWord}`)
+    .replace(/Rs\.?\s*([0-9.]+)/gi, `$1 ${currencyWord}`)
+    // Remove markdown bold, italic, code
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
     .replace(/`([^`]+)`/g, '$1')
     .replace(/^#+\s+/gm, '')
     .replace(/^[•\-*]\s+/gm, '')
     .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')
+    // Remove punctuation that causes awkward robotic pauses
+    .replace(/[:|()_~]/g, ' ')
+    .replace(/\.{2,}/g, '.')
     .replace(/\n+/g, '. ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -65,25 +100,31 @@ function cleanTextForSpeech(text: string): string {
 
 export function AIAssistantFAB() {
   const [isOpen, setIsOpen] = useState(false);
-  const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES);
+  const [messages, setMessages] = useState<ChatMessage[]>(INITIAL_MESSAGES_ML);
   const [inputValue, setInputValue] = useState('');
   const [isListening, setIsListening] = useState(false);
   const [isLoading, setIsLoading] = useState(false);
   const [isSpeaking, setIsSpeaking] = useState(false);
   const [isLiveVoiceMode, setIsLiveVoiceMode] = useState(false);
+  const [speechLang, setSpeechLang] = useState<'ml-IN' | 'en-IN'>('ml-IN');
+  const [micError, setMicError] = useState<string | null>(null);
   const [currentSpeakingId, setCurrentSpeakingId] = useState<string | null>(null);
   const [liveTranscript, setLiveTranscript] = useState('');
   const [liveStatus, setLiveStatus] = useState<'idle' | 'listening' | 'processing' | 'speaking'>('idle');
 
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const recognitionRef = useRef<any>(null);
+  const isMicActiveRef = useRef(false);
   const isLiveVoiceModeRef = useRef(false);
   const isSpeakingRef = useRef(false);
+  const isLoadingRef = useRef(false);
+  const speechLangRef = useRef<'ml-IN' | 'en-IN'>('ml-IN');
   const silenceTimerRef = useRef<any>(null);
+  const restartTimerRef = useRef<any>(null);
   const speechSynthIntervalRef = useRef<any>(null);
   const transcriptAccumulatorRef = useRef('');
 
-  // Keep refs in sync with state for access in callbacks
+  // Sync refs with state
   useEffect(() => {
     isLiveVoiceModeRef.current = isLiveVoiceMode;
   }, [isLiveVoiceMode]);
@@ -91,6 +132,38 @@ export function AIAssistantFAB() {
   useEffect(() => {
     isSpeakingRef.current = isSpeaking;
   }, [isSpeaking]);
+
+  useEffect(() => {
+    isLoadingRef.current = isLoading;
+  }, [isLoading]);
+
+  useEffect(() => {
+    speechLangRef.current = speechLang;
+    if (recognitionRef.current) {
+      recognitionRef.current.lang = speechLang;
+    }
+  }, [speechLang]);
+
+  // Load language preference from localStorage
+  useEffect(() => {
+    try {
+      const savedLang = localStorage.getItem('cashmanager_ai_lang');
+      if (savedLang === 'en-IN' || savedLang === 'ml-IN') {
+        setSpeechLang(savedLang);
+        if (savedLang === 'en-IN') {
+          setMessages(INITIAL_MESSAGES_EN);
+        }
+      }
+    } catch {}
+  }, []);
+
+  const toggleLanguage = () => {
+    const nextLang = speechLang === 'ml-IN' ? 'en-IN' : 'ml-IN';
+    setSpeechLang(nextLang);
+    try {
+      localStorage.setItem('cashmanager_ai_lang', nextLang);
+    } catch {}
+  };
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -115,7 +188,7 @@ export function AIAssistantFAB() {
     setCurrentSpeakingId(null);
   }, []);
 
-  // Text-To-Speech engine using Web Speech API
+  // Text-To-Speech engine using Web Speech API with native Malayalam tuning
   const speakText = useCallback(
     (rawText: string, onEnd?: () => void, messageId?: string) => {
       if (typeof window === 'undefined' || !('speechSynthesis' in window)) {
@@ -125,27 +198,42 @@ export function AIAssistantFAB() {
 
       stopSpeech();
 
-      const spokenText = cleanTextForSpeech(rawText);
+      const isMalayalam = /[\u0D00-\u0D7F]/.test(rawText);
+      const spokenText = cleanTextForSpeech(rawText, isMalayalam);
       if (!spokenText) {
         onEnd?.();
         return;
       }
 
       const utterance = new SpeechSynthesisUtterance(spokenText);
-      utterance.rate = 1.0;
+      // Naturally paced rate for Malayalam voice clarity
+      utterance.rate = isMalayalam ? 0.96 : 1.0;
       utterance.pitch = 1.0;
 
-      // Select highest quality available English voice (en-IN or en-US)
       const voices = window.speechSynthesis.getVoices();
-      const preferredVoice =
-        voices.find(
-          (v) =>
-            (v.lang.includes('en-IN') || v.lang.includes('en-US') || v.lang.includes('en-GB')) &&
-            !v.name.includes('Bad')
-        ) || voices[0];
-
-      if (preferredVoice) {
-        utterance.voice = preferredVoice;
+      if (isMalayalam) {
+        utterance.lang = 'ml-IN';
+        // Look for native Malayalam or Indic voices
+        const mlVoice =
+          voices.find(
+            (v) =>
+              v.lang.toLowerCase().replace('_', '-').startsWith('ml') ||
+              v.lang.toLowerCase().replace('_', '-').includes('ml-in') ||
+              v.name.toLowerCase().includes('malayalam')
+          ) ||
+          voices.find((v) => v.lang.toLowerCase().includes('hi-in')) ||
+          voices.find((v) => v.lang.toLowerCase().includes('en-in')) ||
+          voices[0];
+        if (mlVoice) utterance.voice = mlVoice;
+      } else {
+        utterance.lang = 'en-IN';
+        const preferredVoice =
+          voices.find(
+            (v) =>
+              (v.lang.includes('en-IN') || v.lang.includes('en-US') || v.lang.includes('en-GB')) &&
+              !v.name.includes('Bad')
+          ) || voices[0];
+        if (preferredVoice) utterance.voice = preferredVoice;
       }
 
       utterance.onstart = () => {
@@ -153,7 +241,7 @@ export function AIAssistantFAB() {
         if (messageId) setCurrentSpeakingId(messageId);
         setLiveStatus('speaking');
 
-        // Chrome keep-alive bug workaround (pauses long utterances after 14s)
+        // Chrome keep-alive bug workaround
         if (speechSynthIntervalRef.current) clearInterval(speechSynthIntervalRef.current);
         speechSynthIntervalRef.current = setInterval(() => {
           if (window.speechSynthesis.speaking) {
@@ -192,8 +280,13 @@ export function AIAssistantFAB() {
     [stopSpeech]
   );
 
-  // Stop speech recognition
+  // Stop speech recognition completely
   const stopListening = useCallback(() => {
+    isMicActiveRef.current = false;
+    if (restartTimerRef.current) {
+      clearTimeout(restartTimerRef.current);
+      restartTimerRef.current = null;
+    }
     if (silenceTimerRef.current) {
       clearTimeout(silenceTimerRef.current);
       silenceTimerRef.current = null;
@@ -201,9 +294,7 @@ export function AIAssistantFAB() {
     if (recognitionRef.current) {
       try {
         recognitionRef.current.stop();
-      } catch (e) {
-        // Ignore if already stopped
-      }
+      } catch (e) {}
     }
     setIsListening(false);
   }, []);
@@ -212,14 +303,16 @@ export function AIAssistantFAB() {
   const handleSend = useCallback(
     async (textToSend?: string) => {
       const text = (textToSend || inputValue || transcriptAccumulatorRef.current).trim();
-      if (!text || isLoading) return;
+      if (!text || isLoadingRef.current) return;
 
       stopListening();
       transcriptAccumulatorRef.current = '';
       setLiveTranscript('');
       setInputValue('');
       setIsLoading(true);
+      isLoadingRef.current = true;
       setLiveStatus('processing');
+      setMicError(null);
 
       const userMessage: ChatMessage = {
         id: Date.now().toString(),
@@ -250,7 +343,7 @@ export function AIAssistantFAB() {
         }
 
         const data = await res.json();
-        const botResponseText = data.content || 'I processed your request.';
+        const botResponseText = data.content || 'കണക്കുകൾ ഒക്കെ പരിശോധിച്ച് കഴിഞ്ഞിട്ടുണ്ട് ട്ടോ.';
         const botMessageId = (Date.now() + 1).toString();
 
         const botMessage: ChatMessage = {
@@ -264,14 +357,13 @@ export function AIAssistantFAB() {
         setMessages((prev) => [...prev, botMessage]);
 
         // AUTOMATIC TWO-WAY CONVERSATIONAL LOOP:
-        // In Live Voice Mode, automatically speak the response aloud,
-        // and immediately restart listening when speech finishes.
         if (isLiveVoiceModeRef.current) {
           speakText(
             botResponseText,
             () => {
-              // On speech finish: if live mode is still active, automatically listen again!
+              // Once speaking finishes, automatically reopen mic if live mode is still active
               if (isLiveVoiceModeRef.current) {
+                isMicActiveRef.current = true;
                 startListening();
               }
             },
@@ -280,56 +372,83 @@ export function AIAssistantFAB() {
         }
       } catch (err: any) {
         console.error('Chat error:', err);
+        const isMalayalam = speechLangRef.current === 'ml-IN';
         const errorMessage: ChatMessage = {
           id: (Date.now() + 1).toString(),
           sender: 'assistant',
-          text: 'Sorry, I encountered an issue connecting to your financial database. Please try again.',
+          text: isMalayalam
+            ? 'കണക്കുകൾ എടുക്കാൻ ഒരു ചെറിയ തടസ്സം വന്നു ട്ടോ. ഒന്നുക്കൂടി ചോദിക്കാമോ?'
+            : 'Sorry, I encountered an issue connecting to your financial database. Please try again.',
           timestamp: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
         };
         setMessages((prev) => [...prev, errorMessage]);
 
         if (isLiveVoiceModeRef.current) {
           speakText(errorMessage.text, () => {
-            if (isLiveVoiceModeRef.current) startListening();
+            if (isLiveVoiceModeRef.current) {
+              isMicActiveRef.current = true;
+              startListening();
+            }
           });
         }
       } finally {
         setIsLoading(false);
+        isLoadingRef.current = false;
       }
     },
-    [inputValue, isLoading, messages, speakText, stopListening]
+    [inputValue, messages, speakText, stopListening]
   );
 
-  // Start speech recognition
-  const startListening = useCallback(() => {
-    // If AI is currently speaking, stop it immediately so mic doesn't capture AI's voice
+  // Start continuous speech recognition with permission check & auto-restart guard
+  const startListening = useCallback(async () => {
     stopSpeech();
+    setMicError(null);
 
-    if (!recognitionRef.current) {
-      if (typeof window !== 'undefined') {
-        const SpeechRecognition =
-          (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
-        if (!SpeechRecognition) {
-          alert('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+    if (typeof window === 'undefined') return;
+    const SpeechRecognition =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognition) {
+      setMicError('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      return;
+    }
+
+    // Verify mic permission if supported
+    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+      try {
+        const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+        stream.getTracks().forEach((track) => track.stop());
+      } catch (err: any) {
+        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
+          setMicError('Microphone access is blocked in browser settings. Please enable microphone permission to speak.');
+          isMicActiveRef.current = false;
+          setIsListening(false);
           return;
         }
       }
     }
 
     try {
+      isMicActiveRef.current = true;
       transcriptAccumulatorRef.current = '';
       setLiveTranscript('');
       setLiveStatus('listening');
-      recognitionRef.current?.start();
       setIsListening(true);
+
+      if (recognitionRef.current) {
+        recognitionRef.current.lang = speechLangRef.current;
+        try {
+          recognitionRef.current.start();
+        } catch (e) {
+          // If already started, start() throws an exception; safe to ignore
+        }
+      }
     } catch (err: any) {
-      // If recognition is already started, start() throws an error; safe to ignore
       console.warn('Recognition start caught:', err);
-      setIsListening(true);
     }
   }, [stopSpeech]);
 
-  // Initialize Speech Recognition instance
+  // Initialize Speech Recognition instance with continuous listening & auto-reconnect
   useEffect(() => {
     if (typeof window === 'undefined') return;
 
@@ -341,7 +460,8 @@ export function AIAssistantFAB() {
     const recognition = new SpeechRecognition();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'en-IN';
+    recognition.maxAlternatives = 1;
+    recognition.lang = speechLang;
 
     recognition.onresult = (event: any) => {
       let interimTranscript = '';
@@ -356,47 +476,57 @@ export function AIAssistantFAB() {
         }
       }
 
-      const combined = (transcriptAccumulatorRef.current + finalTranscript + interimTranscript).trim();
       if (finalTranscript) {
         transcriptAccumulatorRef.current += finalTranscript;
       }
 
-      setInputValue(combined);
-      setLiveTranscript(combined);
+      const currentFullText = (transcriptAccumulatorRef.current + interimTranscript).trim();
+      setInputValue(currentFullText);
+      setLiveTranscript(currentFullText);
 
-      // In Live Voice Mode: Automatic silence detection (1.4 seconds of silence triggers auto-send)
-      if (isLiveVoiceModeRef.current && combined.length > 0) {
-        if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      // Smart silence debounce timer: wait 2.2s of silence before auto-submitting in Live Voice Mode
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (currentFullText.length > 0 && isLiveVoiceModeRef.current) {
         silenceTimerRef.current = setTimeout(() => {
-          handleSend(combined);
-        }, 1400);
+          if (isMicActiveRef.current && currentFullText.length > 0) {
+            handleSend(currentFullText);
+          }
+        }, 2200);
       }
     };
 
     recognition.onerror = (event: any) => {
-      if (event.error !== 'no-speech') {
-        console.warn('Speech recognition error:', event.error);
+      if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
+        isMicActiveRef.current = false;
+        setIsListening(false);
+        setMicError('Microphone permission blocked. Please allow mic access in browser settings.');
+        return;
       }
-      setIsListening(false);
-      // In live mode, if error was 'no-speech' or temporary, re-listen unless processing/speaking
-      if (isLiveVoiceModeRef.current && !isLoading && !isSpeakingRef.current) {
-        setTimeout(() => {
-          if (isLiveVoiceModeRef.current && !isSpeakingRef.current) {
-            startListening();
-          }
-        }, 600);
+      // 'no-speech' or 'aborted' are normal pauses during natural speaking.
+      // NEVER stop listening on no-speech! Keep isMicActiveRef true so onend cleanly reconnects.
+      if (event.error !== 'no-speech' && event.error !== 'aborted') {
+        console.warn('Speech recognition status:', event.error);
       }
     };
 
     recognition.onend = () => {
-      setIsListening(false);
-      // If still in live mode and not speaking or processing, keep mic open
-      if (isLiveVoiceModeRef.current && !isLoading && !isSpeakingRef.current) {
-        setTimeout(() => {
-          if (isLiveVoiceModeRef.current && !isSpeakingRef.current && !isLoading) {
-            startListening();
+      // CONTINUOUS LISTENING ENGINE:
+      // Browser SpeechRecognition engines prematurely end after 1 word or short pauses.
+      // If user still wants mic on and we are not speaking or querying, automatically restart immediately!
+      if (isMicActiveRef.current && !isLoadingRef.current && !isSpeakingRef.current) {
+        if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
+        restartTimerRef.current = setTimeout(() => {
+          if (isMicActiveRef.current && !isLoadingRef.current && !isSpeakingRef.current) {
+            try {
+              recognition.start();
+              setIsListening(true);
+            } catch (err) {
+              console.warn('Recognition auto-restart caught:', err);
+            }
           }
-        }, 400);
+        }, 80);
+      } else {
+        setIsListening(false);
       }
     };
 
@@ -407,29 +537,31 @@ export function AIAssistantFAB() {
         recognition.stop();
       } catch (e) {}
     };
-  }, [handleSend, isLoading, startListening]);
+  }, [handleSend, speechLang]);
 
   // Toggle Live Voice Mode
   const toggleLiveVoiceMode = () => {
     if (isLiveVoiceMode) {
-      // Stop live voice mode
       setIsLiveVoiceMode(false);
+      isMicActiveRef.current = false;
       stopSpeech();
       stopListening();
       setLiveStatus('idle');
     } else {
-      // Start live voice mode
       setIsLiveVoiceMode(true);
+      isMicActiveRef.current = true;
       setLiveStatus('listening');
       startListening();
     }
   };
 
-  // Toggle mic in standard mode
+  // Toggle mic in standard chat bar
   const toggleStandardMic = () => {
-    if (isListening) {
+    if (isListening || isMicActiveRef.current) {
+      isMicActiveRef.current = false;
       stopListening();
     } else {
+      isMicActiveRef.current = true;
       startListening();
     }
   };
@@ -438,6 +570,7 @@ export function AIAssistantFAB() {
   const handleInterrupt = () => {
     stopSpeech();
     if (isLiveVoiceMode) {
+      isMicActiveRef.current = true;
       startListening();
     }
   };
@@ -459,9 +592,11 @@ export function AIAssistantFAB() {
     };
   }, [stopSpeech, stopListening]);
 
+  const activeQuickPrompts = speechLang === 'ml-IN' ? QUICK_PROMPTS_ML : QUICK_PROMPTS_EN;
+
   return (
     <>
-      {/* Floating Action Button (FAB) positioned nicely above mobile bottom dock */}
+      {/* Floating Action Button (FAB) */}
       <div className="fixed bottom-20 md:bottom-6 right-3 sm:right-6 z-40">
         <motion.button
           type="button"
@@ -472,6 +607,7 @@ export function AIAssistantFAB() {
             setIsOpen(nextOpen);
             if (!nextOpen) {
               setIsLiveVoiceMode(false);
+              isMicActiveRef.current = false;
               stopSpeech();
               stopListening();
             }
@@ -504,7 +640,7 @@ export function AIAssistantFAB() {
             transition={{ type: 'spring', damping: 25, stiffness: 320 }}
             className="fixed bottom-34 md:bottom-20 right-3 sm:right-6 z-50 flex h-[520px] max-h-[80vh] w-[calc(100vw-24px)] max-w-sm flex-col overflow-hidden rounded-2xl border border-neutral-200/90 bg-white shadow-2xl"
           >
-            {/* Header with Live Voice Toggle */}
+            {/* Header with Language Selector & Voice Toggle */}
             <div className="flex h-13 items-center justify-between border-b border-neutral-100 bg-white/95 backdrop-blur-md px-3.5">
               <div className="flex items-center gap-2">
                 <div className="flex h-7 w-7 items-center justify-center rounded-lg bg-neutral-900 text-white">
@@ -512,34 +648,53 @@ export function AIAssistantFAB() {
                 </div>
                 <div>
                   <h3 className="text-xs font-semibold text-neutral-900 flex items-center gap-1.5">
-                    Finance Assistant
+                    {speechLang === 'ml-IN' ? 'സാമ്പത്തിക സഹായി' : 'Finance Assistant'}
                   </h3>
                   <span className="text-[10px] text-emerald-600 font-medium flex items-center gap-1">
                     <span className="h-1.5 w-1.5 rounded-full bg-emerald-500 animate-pulse" />
-                    Live Database Tools
+                    {speechLang === 'ml-IN' ? 'എഐ • തത്സമയം' : 'Gemini AI • Live Tools'}
                   </span>
                 </div>
               </div>
 
               {/* Header Actions */}
               <div className="flex items-center gap-1.5">
+                {/* Language Switcher Pill */}
+                <button
+                  type="button"
+                  onClick={toggleLanguage}
+                  className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[10px] font-semibold transition-colors border border-neutral-200/80 bg-neutral-50 hover:bg-neutral-100 text-neutral-700"
+                  title="Switch between Malayalam and English"
+                >
+                  <Globe className="h-3 w-3 text-emerald-600" />
+                  <span>{speechLang === 'ml-IN' ? 'മലയാളം' : 'English'}</span>
+                </button>
+
                 {/* Live Voice Mode Toggle Pill */}
                 <button
                   type="button"
                   onClick={toggleLiveVoiceMode}
                   className={`inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[11px] font-medium transition-all ${
                     isLiveVoiceMode
-                      ? 'bg-rose-50 text-rose-600 border border-rose-200 ring-2 ring-rose-500/20 shadow-xs'
+                      ? 'bg-emerald-50 text-emerald-700 border border-emerald-300 ring-2 ring-emerald-500/20 shadow-xs'
                       : 'bg-neutral-100 text-neutral-600 hover:bg-neutral-200/80 border border-neutral-200/60'
                   }`}
                   title={isLiveVoiceMode ? 'Exit Live Voice Mode' : 'Start Live Voice Conversation'}
                 >
                   <Radio
                     className={`h-3 w-3 ${
-                      isLiveVoiceMode ? 'animate-pulse text-rose-600' : 'text-neutral-400'
+                      isLiveVoiceMode ? 'animate-pulse text-emerald-600' : 'text-neutral-400'
                     }`}
                   />
-                  <span>{isLiveVoiceMode ? 'Live Voice' : 'Voice Mode'}</span>
+                  <span>
+                    {isLiveVoiceMode
+                      ? speechLang === 'ml-IN'
+                        ? 'തത്സമയം'
+                        : 'Live'
+                      : speechLang === 'ml-IN'
+                      ? 'ശബ്ദം'
+                      : 'Voice'}
+                  </span>
                 </button>
 
                 <button
@@ -547,6 +702,7 @@ export function AIAssistantFAB() {
                   onClick={() => {
                     setIsOpen(false);
                     setIsLiveVoiceMode(false);
+                    isMicActiveRef.current = false;
                     stopSpeech();
                     stopListening();
                   }}
@@ -564,58 +720,65 @@ export function AIAssistantFAB() {
                 <div className="inline-flex items-center gap-2 rounded-full border border-neutral-200/80 bg-white px-3.5 py-1 text-xs font-medium text-neutral-700 shadow-2xs">
                   {liveStatus === 'listening' && (
                     <>
-                      <span className="h-2 w-2 rounded-full bg-rose-500 animate-ping" />
-                      <span className="text-rose-600 font-semibold">Listening to you...</span>
+                      <span className="h-2 w-2 rounded-full bg-emerald-500 animate-ping" />
+                      <span className="text-emerald-700 font-semibold">
+                        {speechLang === 'ml-IN' ? 'കേൾക്കുന്നുണ്ട്... സംസാരിച്ചോളൂ ട്ടോ' : 'Listening continuously... Speak naturally'}
+                      </span>
                     </>
                   )}
                   {liveStatus === 'processing' && (
                     <>
                       <Loader2 className="h-3 w-3 animate-spin text-neutral-600" />
-                      <span className="text-neutral-700">Thinking & querying database...</span>
+                      <span className="text-neutral-700">
+                        {speechLang === 'ml-IN' ? 'കണക്കുകൾ പരിശോധിക്കുന്നു...' : 'Thinking & querying...'}
+                      </span>
                     </>
                   )}
                   {liveStatus === 'speaking' && (
                     <>
                       <span className="h-2 w-2 rounded-full bg-emerald-500 animate-pulse" />
-                      <span className="text-emerald-700 font-semibold">AI is speaking...</span>
+                      <span className="text-emerald-700 font-semibold">
+                        {speechLang === 'ml-IN' ? 'മറുപടി പറയുന്നു...' : 'AI is speaking...'}
+                      </span>
                     </>
                   )}
                   {liveStatus === 'idle' && (
                     <>
                       <span className="h-2 w-2 rounded-full bg-neutral-400" />
-                      <span className="text-neutral-500">Ready</span>
+                      <span className="text-neutral-500">
+                        {speechLang === 'ml-IN' ? 'തയ്യാറാണ്' : 'Ready'}
+                      </span>
                     </>
                   )}
                 </div>
 
                 {/* Animated Concentric Sound Wave Sphere */}
                 <div className="relative my-auto flex items-center justify-center">
-                  {/* Outer pulsating glow rings */}
                   <motion.div
                     animate={{
                       scale: isListening ? [1, 1.35, 1] : isSpeaking ? [1, 1.25, 1] : 1,
-                      opacity: isListening || isSpeaking ? [0.2, 0.4, 0.2] : 0.05,
+                      opacity: isListening || isSpeaking ? [0.2, 0.45, 0.2] : 0.05,
                     }}
                     transition={{ repeat: Infinity, duration: isListening ? 1.5 : 2 }}
                     className={`absolute h-40 w-40 rounded-full ${
                       isListening
-                        ? 'bg-rose-500'
-                        : isSpeaking
                         ? 'bg-emerald-500'
+                        : isSpeaking
+                        ? 'bg-teal-500'
                         : 'bg-neutral-300'
                     }`}
                   />
                   <motion.div
                     animate={{
                       scale: isListening ? [1, 1.2, 1] : isSpeaking ? [1, 1.15, 1] : 1,
-                      opacity: isListening || isSpeaking ? [0.3, 0.6, 0.3] : 0.1,
+                      opacity: isListening || isSpeaking ? [0.3, 0.65, 0.3] : 0.1,
                     }}
                     transition={{ repeat: Infinity, duration: isListening ? 1.2 : 1.8 }}
                     className={`absolute h-28 w-28 rounded-full ${
                       isListening
-                        ? 'bg-rose-400'
-                        : isSpeaking
                         ? 'bg-emerald-400'
+                        : isSpeaking
+                        ? 'bg-teal-400'
                         : 'bg-neutral-200'
                     }`}
                   />
@@ -627,18 +790,18 @@ export function AIAssistantFAB() {
                     onClick={isSpeaking ? handleInterrupt : toggleStandardMic}
                     className={`relative z-10 flex h-20 w-20 items-center justify-center rounded-full text-white shadow-xl transition-all duration-300 ${
                       isListening
-                        ? 'bg-rose-600 shadow-rose-600/30'
+                        ? 'bg-emerald-600 shadow-emerald-600/30 ring-4 ring-emerald-200/70'
                         : isSpeaking
-                        ? 'bg-emerald-600 shadow-emerald-600/30 ring-4 ring-emerald-100'
+                        ? 'bg-teal-600 shadow-teal-600/30 ring-4 ring-teal-200/70'
                         : 'bg-neutral-900'
                     }`}
                   >
                     {isSpeaking ? (
-                      <Volume2 className="h-8 w-8 animate-pulse" />
+                      <Volume2 className="h-8 w-8 animate-pulse text-white" />
                     ) : isListening ? (
-                      <Mic className="h-8 w-8" />
+                      <Mic className="h-8 w-8 text-white animate-pulse" />
                     ) : (
-                      <MicOff className="h-8 w-8 text-neutral-400" />
+                      <Mic className="h-8 w-8 text-neutral-300" />
                     )}
                   </motion.button>
                 </div>
@@ -652,15 +815,21 @@ export function AIAssistantFAB() {
                       </p>
                     ) : isSpeaking ? (
                       <p className="text-xs text-neutral-500">
-                        Speaking response... Tap orb or button to interrupt.
+                        {speechLang === 'ml-IN'
+                          ? 'മറുപടി പറയുന്നു... തടസ്സപ്പെടുത്താൻ ടാപ്പ് ചെയ്യുക.'
+                          : 'Speaking response... Tap orb or button to interrupt.'}
                       </p>
                     ) : isListening ? (
-                      <p className="text-xs text-neutral-400">
-                        Speak your question naturally. Silence auto-sends.
+                      <p className="text-xs text-neutral-500">
+                        {speechLang === 'ml-IN'
+                          ? 'മുഴുവനായും സംസാരിച്ചോളൂ... ഇടയ്ക്ക് നിർത്തിയാലും മൈക്ക് ഓഫ് ആവില്ല ട്ടോ.'
+                          : 'Speak your full sentence naturally... continuous listening active.'}
                       </p>
                     ) : (
                       <p className="text-xs text-neutral-400">
-                        Tap the orb to start speaking.
+                        {speechLang === 'ml-IN'
+                          ? 'സംസാരിക്കാൻ ഓർബിൽ ടാപ്പ് ചെയ്യുക.'
+                          : 'Tap the orb to start speaking.'}
                       </p>
                     )}
                   </div>
@@ -674,7 +843,7 @@ export function AIAssistantFAB() {
                         className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-700 hover:bg-neutral-50 shadow-2xs"
                       >
                         <Square className="h-3 w-3 fill-neutral-700" />
-                        Interrupt & Speak
+                        {speechLang === 'ml-IN' ? 'നിർത്തി സംസാരിക്കുക' : 'Interrupt & Speak'}
                       </button>
                     )}
                     <button
@@ -683,7 +852,7 @@ export function AIAssistantFAB() {
                       className="inline-flex items-center gap-1.5 rounded-lg border border-neutral-200 bg-white px-3 py-1.5 text-xs font-medium text-neutral-600 hover:bg-neutral-50 shadow-2xs"
                     >
                       <MessageSquare className="h-3 w-3" />
-                      View Chat Log
+                      {speechLang === 'ml-IN' ? 'കണക്കുകൾ കാണുക' : 'View Chat Log'}
                     </button>
                   </div>
                 </div>
@@ -718,7 +887,9 @@ export function AIAssistantFAB() {
                                 className="inline-flex items-center gap-1 rounded bg-white px-1.5 py-0.5 text-[9px] font-medium text-neutral-600 border border-neutral-200"
                               >
                                 <Database className="h-2.5 w-2.5 text-emerald-600" />
-                                {tool.replace(/_/g, ' ')}
+                                {speechLang === 'ml-IN'
+                                  ? TOOL_LABELS_ML[tool] || 'കണക്ക് വിവരങ്ങൾ'
+                                  : tool.replace(/_/g, ' ')}
                               </span>
                             ))}
                           </div>
@@ -742,19 +913,23 @@ export function AIAssistantFAB() {
                             }`}
                             title={
                               currentSpeakingId === m.id
-                                ? 'Stop speaking'
+                                ? speechLang === 'ml-IN'
+                                  ? 'നിർത്തുക'
+                                  : 'Stop speaking'
+                                : speechLang === 'ml-IN'
+                                ? 'ശബ്ദത്തിൽ കേൾക്കുക'
                                 : 'Read aloud with Text-to-Speech'
                             }
                           >
                             {currentSpeakingId === m.id ? (
                               <>
                                 <VolumeX className="h-3 w-3" />
-                                <span>Stop</span>
+                                <span>{speechLang === 'ml-IN' ? 'നിർത്തുക' : 'Stop'}</span>
                               </>
                             ) : (
                               <>
                                 <Volume2 className="h-3 w-3" />
-                                <span>Read aloud</span>
+                                <span>{speechLang === 'ml-IN' ? 'കേൾക്കുക' : 'Read aloud'}</span>
                               </>
                             )}
                           </button>
@@ -770,7 +945,11 @@ export function AIAssistantFAB() {
                   {isLoading && (
                     <div className="flex items-center gap-2 text-xs text-neutral-400 bg-neutral-50 px-3 py-2 rounded-xl w-fit">
                       <Loader2 className="h-3.5 w-3.5 animate-spin text-neutral-600" />
-                      <span>Querying live database...</span>
+                      <span>
+                        {speechLang === 'ml-IN'
+                          ? 'കണക്കുകൾ പരിശോധിക്കുന്നു...'
+                          : 'Querying live database...'}
+                      </span>
                     </div>
                   )}
 
@@ -781,10 +960,10 @@ export function AIAssistantFAB() {
                 {messages.length <= 2 && (
                   <div className="border-t border-neutral-100 bg-neutral-50/60 px-3 py-2">
                     <p className="text-[10px] uppercase font-semibold text-neutral-400 mb-1.5 tracking-wider">
-                      Suggestions
+                      {speechLang === 'ml-IN' ? 'നിർദ്ദേശങ്ങൾ' : 'Suggestions'}
                     </p>
                     <div className="flex gap-1.5 overflow-x-auto pb-1 no-scrollbar">
-                      {QUICK_PROMPTS.map((prompt, idx) => (
+                      {activeQuickPrompts.map((prompt, idx) => (
                         <button
                           key={idx}
                           type="button"
@@ -795,6 +974,23 @@ export function AIAssistantFAB() {
                         </button>
                       ))}
                     </div>
+                  </div>
+                )}
+
+                {/* Microphone Error Notification Banner */}
+                {micError && (
+                  <div className="mx-2.5 mt-2 flex items-center justify-between gap-2 rounded-lg bg-rose-50 border border-rose-200 px-2.5 py-1.5 text-[11px] text-rose-700">
+                    <div className="flex items-center gap-1.5">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-600" />
+                      <span>{micError}</span>
+                    </div>
+                    <button
+                      type="button"
+                      onClick={() => setMicError(null)}
+                      className="text-rose-500 hover:text-rose-800"
+                    >
+                      <X className="h-3 w-3" />
+                    </button>
                   </div>
                 )}
 
@@ -811,31 +1007,43 @@ export function AIAssistantFAB() {
                       type="text"
                       placeholder={
                         isListening
-                          ? 'Listening... Speak now'
-                          : 'Ask about balance, debts, funds...'
+                          ? speechLang === 'ml-IN'
+                            ? 'കേൾക്കുന്നുണ്ട്... മുഴുവനായി സംസാരിച്ചോളൂ ട്ടോ'
+                            : 'Listening continuously... Speak your sentence'
+                          : speechLang === 'ml-IN'
+                          ? 'ചോദിച്ചോളൂ (ഉദാ: കയ്യിലുള്ള പണം, സ്വിഗ്ഗി, കടം...)'
+                          : 'Ask about My Cash, Grand Total, funds...'
                       }
                       value={inputValue}
                       onChange={(e) => setInputValue(e.target.value)}
                       className={`w-full rounded-xl border bg-neutral-50/60 px-3 py-2 text-xs text-neutral-900 placeholder:text-neutral-400 focus:bg-white focus:outline-hidden ${
                         isListening
-                          ? 'border-rose-400 ring-2 ring-rose-100'
+                          ? 'border-emerald-500 ring-2 ring-emerald-100'
                           : 'border-neutral-200 focus:border-neutral-900'
                       }`}
                     />
 
-                    {/* Mic Button (supports one-shot speech to text) */}
+                    {/* Mic Button: Continuous listening with auto-reconnect */}
                     <motion.button
                       type="button"
                       whileTap={{ scale: 0.9 }}
                       onClick={toggleStandardMic}
-                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-colors ${
+                      className={`flex h-8 w-8 shrink-0 items-center justify-center rounded-lg transition-all ${
                         isListening
-                          ? 'bg-rose-600 text-white animate-pulse'
+                          ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-400/50 animate-pulse'
+                          : micError
+                          ? 'bg-rose-50 text-rose-600 border border-rose-300'
                           : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'
                       }`}
-                      title={isListening ? 'Stop listening' : 'Speak message'}
+                      title={
+                        isListening
+                          ? 'Listening continuously. Click to stop'
+                          : speechLang === 'ml-IN'
+                          ? 'മലയാളത്തിൽ സംസാരിക്കൂ'
+                          : 'Speak message'
+                      }
                     >
-                      {isListening ? (
+                      {micError ? (
                         <MicOff className="h-4 w-4" />
                       ) : (
                         <Mic className="h-4 w-4" />

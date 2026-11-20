@@ -69,7 +69,7 @@ export function getDefaultMilkSettings(): MilkSubscriptionSettings {
 }
 
 /**
- * Retrieves milk subscription settings (localStorage + IndexedDB cache)
+ * Retrieves milk subscription settings (Supabase app_settings + localStorage + IndexedDB cache)
  */
 export async function getMilkSubscriptionSettings(): Promise<MilkSubscriptionSettings> {
   let settings: MilkSubscriptionSettings | null = null;
@@ -95,6 +95,30 @@ export async function getMilkSubscriptionSettings(): Promise<MilkSubscriptionSet
     }
   }
 
+  // 3. Fetch authoritative settings from Supabase app_settings table (for cross-device & production sync)
+  try {
+    const { data, error } = await supabase
+      .from('app_settings')
+      .select('value')
+      .eq('key', 'milk_subscription')
+      .maybeSingle();
+
+    if (!error && data?.value) {
+      const remoteSettings = data.value as unknown as MilkSubscriptionSettings;
+      settings = remoteSettings;
+
+      // Keep local caches updated with latest remote settings
+      if (typeof window !== 'undefined') {
+        try {
+          localStorage.setItem(STORAGE_KEY, JSON.stringify(remoteSettings));
+        } catch {}
+      }
+      await setCache(CACHE_KEY, remoteSettings);
+    }
+  } catch (err) {
+    console.warn('Could not load remote milk settings from Supabase:', err);
+  }
+
   if (!settings) {
     settings = getDefaultMilkSettings();
   }
@@ -108,7 +132,7 @@ export async function getMilkSubscriptionSettings(): Promise<MilkSubscriptionSet
 }
 
 /**
- * Saves milk subscription settings
+ * Saves milk subscription settings (persisted across Supabase app_settings, localStorage, and IndexedDB)
  */
 export async function saveMilkSubscriptionSettings(
   updates: Partial<MilkSubscriptionSettings>
@@ -131,7 +155,18 @@ export async function saveMilkSubscriptionSettings(
   // 2. Save to IndexedDB
   await setCache(CACHE_KEY, updated);
 
-  // 3. Dispatch events to notify UI
+  // 3. Persist to Supabase app_settings table for production cross-device sync
+  try {
+    await supabase.from('app_settings').upsert({
+      key: 'milk_subscription',
+      value: updated as any,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (e) {
+    console.warn('Failed to sync milk subscription settings to Supabase app_settings:', e);
+  }
+
+  // 4. Dispatch events to notify UI
   if (typeof window !== 'undefined') {
     window.dispatchEvent(
       new CustomEvent('cashmanager:milk-subscription-updated', { detail: updated })

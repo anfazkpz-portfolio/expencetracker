@@ -3,7 +3,7 @@
 // Version: 2.0.0 — Works on localhost:3000 (dev) AND production
 // ============================================================================
 
-const CACHE_VERSION = 'v4';
+const CACHE_VERSION = 'v5';
 const SHELL_CACHE    = `cashmanager-shell-${CACHE_VERSION}`;
 const RUNTIME_CACHE  = `cashmanager-runtime-${CACHE_VERSION}`;
 const RSC_CACHE      = `cashmanager-rsc-${CACHE_VERSION}`;
@@ -24,6 +24,7 @@ const STATIC_ASSETS = [
   '/icons/icon.svg',
   '/icons/icon-192x192.png',
   '/icons/icon-512x512.png',
+  '/icons/apple-touch-icon.png',
 ];
 
 // Patterns that must NEVER be intercepted (dev tooling)

@@ -239,8 +239,8 @@ export function DebtPaymentModal({
               Automatic Cash Sync:
             </span>{' '}
             {isLent
-              ? `Adds +${formatCurrency(parsedAmount)} as Income to your main cash balance.`
-              : `Deducts -${formatCurrency(parsedAmount)} as Expense from your main cash balance.`}
+              ? `Adds +${formatCurrency(parsedAmount)} as Income to your My Cash balance.`
+              : `Deducts -${formatCurrency(parsedAmount)} as Expense from your My Cash balance.`}
           </div>
         </div>
 

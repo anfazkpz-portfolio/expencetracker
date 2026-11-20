@@ -12,6 +12,7 @@ import {
   getTodayDateString,
   DebtWithPaid,
 } from '@/lib/supabase/api';
+import { supabase } from '@/lib/supabase/client';
 import { invalidateFinanceQueries } from '@/lib/queries/invalidation';
 import type { TransactionType } from '@/types/database';
 import { getCache, setCache } from '@/lib/offline/db';
@@ -31,7 +32,24 @@ const CONTACTS_CACHE_KEY = 'cache_ledger_contacts';
 
 export async function getLedgerContacts(): Promise<LedgerContact[]> {
   try {
-    const cached = await getCache<LedgerContact[]>(CONTACTS_CACHE_KEY);
+    let cached = await getCache<LedgerContact[]>(CONTACTS_CACHE_KEY);
+
+    // Fetch from Supabase app_settings table for cross-device sync
+    try {
+      const { data, error } = await supabase
+        .from('app_settings')
+        .select('value')
+        .eq('key', 'ledger_contacts')
+        .maybeSingle();
+
+      if (!error && data?.value && Array.isArray(data.value)) {
+        cached = data.value as unknown as LedgerContact[];
+        await setCache(CONTACTS_CACHE_KEY, cached);
+      }
+    } catch (e) {
+      console.warn('Could not load ledger contacts from Supabase:', e);
+    }
+
     return cached || [];
   } catch (err) {
     console.warn('Failed to load ledger contacts:', err);
@@ -66,6 +84,17 @@ export async function addLedgerContact(payload: {
   const updated = [newContact, ...existing];
   await setCache(CONTACTS_CACHE_KEY, updated);
 
+  // Persist to Supabase app_settings table for cross-device sync
+  try {
+    await supabase.from('app_settings').upsert({
+      key: 'ledger_contacts',
+      value: updated as any,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('Failed to persist contacts to Supabase:', err);
+  }
+
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('cashmanager:refresh'));
   }
@@ -79,6 +108,17 @@ export async function deleteLedgerContact(contactName: string): Promise<void> {
     (c) => c.name.toLowerCase() !== contactName.toLowerCase()
   );
   await setCache(CONTACTS_CACHE_KEY, filtered);
+
+  // Persist deletion to Supabase app_settings table
+  try {
+    await supabase.from('app_settings').upsert({
+      key: 'ledger_contacts',
+      value: filtered as any,
+      updated_at: new Date().toISOString(),
+    });
+  } catch (err) {
+    console.warn('Failed to persist contact deletion to Supabase:', err);
+  }
 
   if (typeof window !== 'undefined') {
     window.dispatchEvent(new CustomEvent('cashmanager:refresh'));
