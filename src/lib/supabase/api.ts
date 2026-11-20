@@ -1,4 +1,5 @@
 import { supabase } from './client';
+import { ensureInitialDataSeeded } from './seedCheck';
 import type {
   Transaction,
   SwiggyIncome,
@@ -301,11 +302,22 @@ export async function fetchDailyMilkLogs(limit = 90): Promise<DailyMilkLog[]> {
 
   if (isDeviceOnline()) {
     try {
-      const { data, error } = await supabase
+      let { data, error } = await supabase
         .from('daily_milk_logs')
         .select('*')
         .order('date', { ascending: false })
         .limit(limit);
+
+      // If database has 0 records on initial fresh environment, seed safely once
+      if (!error && (!data || data.length === 0)) {
+        await ensureInitialDataSeeded();
+        const retry = await supabase
+          .from('daily_milk_logs')
+          .select('*')
+          .order('date', { ascending: false })
+          .limit(limit);
+        data = retry.data;
+      }
 
       if (!error && data) {
         await setCache(CACHE_KEYS.MILK_LOGS, data);
@@ -550,7 +562,7 @@ export async function fetchDebts(limit = 150): Promise<DebtWithPaid[]> {
 
   const fetchPromise = (async () => {
     try {
-      const [debtsRes, txs] = await Promise.all([
+      let [debtsRes, txs] = await Promise.all([
         supabase
           .from('debts')
           .select('*')
@@ -564,7 +576,20 @@ export async function fetchDebts(limit = 150): Promise<DebtWithPaid[]> {
         return cached || [];
       }
 
-      const rawDebts: Debt[] = debtsRes.data || [];
+      let rawDebts: Debt[] = debtsRes.data || [];
+
+      // If database has 0 records on initial fresh environment, seed opening balances once
+      if (rawDebts.length === 0) {
+        await ensureInitialDataSeeded();
+        const retry = await supabase
+          .from('debts')
+          .select('*')
+          .order('created_at', { ascending: false })
+          .limit(limit);
+        if (!retry.error && retry.data) {
+          rawDebts = retry.data;
+        }
+      }
 
       // Map payments per debt ID from linked transactions
       const paymentsPerDebt = new Map<string, number>();

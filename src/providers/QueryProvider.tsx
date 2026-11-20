@@ -4,7 +4,7 @@ import React, { useState, useEffect } from 'react';
 import { QueryClient, QueryClientProvider } from '@tanstack/react-query';
 import { clearAllOfflineData } from '@/lib/offline/db';
 
-const PURGE_FLAG = 'cashmanager_seed_exact_nov2026_v1';
+const PURGE_FLAG = 'cashmanager_seed_exact_nov2026_v2';
 
 let globalQueryClient: QueryClient | null = null;
 
@@ -22,14 +22,13 @@ function makeQueryClient(): QueryClient {
   return new QueryClient({
     defaultOptions: {
       queries: {
-        // Intelligent caching: data is kept fresh in memory
-        // No automatic background refetch on page navigation or component re-renders!
-        staleTime: Infinity,
+        // Fast responsive caching with automatic freshness check on mount
+        staleTime: 1000 * 30, // 30 seconds
         gcTime: 1000 * 60 * 60 * 24, // 24 hours
         refetchOnWindowFocus: false,
-        refetchOnMount: false,
-        refetchOnReconnect: false,
-        retry: 1,
+        refetchOnMount: true,
+        refetchOnReconnect: true,
+        retry: 2,
       },
     },
   });
