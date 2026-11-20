@@ -4,7 +4,6 @@ import React, { useState, useRef, useEffect, useCallback } from 'react';
 import {
   MessageSquare,
   Mic,
-  MicOff,
   Send,
   X,
   Sparkles,
@@ -80,9 +79,13 @@ function cleanTextForSpeech(text: string, isMalayalam: boolean): string {
   return text
     // Remove commas from inside numbers e.g. 12,268 -> 12268
     .replace(/([0-9]),([0-9])/g, '$1$2')
+    // Convert negative amounts smoothly
+    .replace(/-\s*₹\s*([0-9.]+)/g, isMalayalam ? 'കുറവ് $1 രൂപ' : 'minus $1 rupees')
     // Convert ₹ / Rs. into currency word
     .replace(/₹\s*([0-9.]+)/g, `$1 ${currencyWord}`)
     .replace(/Rs\.?\s*([0-9.]+)/gi, `$1 ${currencyWord}`)
+    // Format DD/MM/YYYY dates cleanly
+    .replace(/(\d{1,2})\/(\d{1,2})\/(\d{4})/g, '$1 $2 $3')
     // Remove markdown bold, italic, code
     .replace(/\*\*([^*]+)\*\*/g, '$1')
     .replace(/\*([^*]+)\*/g, '$1')
@@ -91,8 +94,8 @@ function cleanTextForSpeech(text: string, isMalayalam: boolean): string {
     .replace(/^[•\-*]\s+/gm, '')
     .replace(/[\u{1F300}-\u{1F9FF}]/gu, '')
     // Remove punctuation that causes awkward robotic pauses
-    .replace(/[:|()_~]/g, ' ')
-    .replace(/\.{2,}/g, '.')
+    .replace(/[:|()_~[\]"']/g, ' ')
+    .replace(/\.{2,}/g, '. ')
     .replace(/\n+/g, '. ')
     .replace(/\s+/g, ' ')
     .trim();
@@ -206,8 +209,8 @@ export function AIAssistantFAB() {
       }
 
       const utterance = new SpeechSynthesisUtterance(spokenText);
-      // Naturally paced rate for Malayalam voice clarity
-      utterance.rate = isMalayalam ? 0.96 : 1.0;
+      // Naturally paced rate for Malayalam voice clarity and natural tone
+      utterance.rate = isMalayalam ? 0.94 : 1.0;
       utterance.pitch = 1.0;
 
       const voices = window.speechSynthesis.getVoices();
@@ -409,18 +412,31 @@ export function AIAssistantFAB() {
       (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
 
     if (!SpeechRecognition) {
-      setMicError('Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.');
+      setMicError(
+        speechLangRef.current === 'ml-IN'
+          ? 'ഈ ബ്രൗസറിൽ സംസാരം തിരിച്ചറിയാനുള്ള സൗകര്യമില്ല. Chrome, Edge അല്ലെങ്കിൽ Safari ഉപയോഗിക്കൂ.'
+          : 'Speech recognition is not supported in this browser. Please use Chrome, Edge, or Safari.'
+      );
       return;
     }
 
-    // Verify mic permission if supported
-    if (navigator.mediaDevices && navigator.mediaDevices.getUserMedia) {
+    // Explicitly verify & request mic permission if supported via getUserMedia
+    if (navigator?.mediaDevices?.getUserMedia) {
       try {
         const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
         stream.getTracks().forEach((track) => track.stop());
+        setMicError(null);
       } catch (err: any) {
-        if (err.name === 'NotAllowedError' || err.name === 'PermissionDeniedError') {
-          setMicError('Microphone access is blocked in browser settings. Please enable microphone permission to speak.');
+        if (
+          err.name === 'NotAllowedError' ||
+          err.name === 'PermissionDeniedError' ||
+          err.message?.includes('denied')
+        ) {
+          setMicError(
+            speechLangRef.current === 'ml-IN'
+              ? 'മൈക്രോഫോൺ അനുമതി തടഞ്ഞിരിക്കുകയാണ്. സംസാരിക്കാൻ ബ്രൗസറിന്റെ സൈറ്റ് സെറ്റിങ്സിൽ മൈക്ക് ഓൺ ആക്കുക ട്ടോ.'
+              : 'Microphone access is blocked in browser settings. Please enable microphone permission to speak.'
+          );
           isMicActiveRef.current = false;
           setIsListening(false);
           return;
@@ -434,13 +450,14 @@ export function AIAssistantFAB() {
       setLiveTranscript('');
       setLiveStatus('listening');
       setIsListening(true);
+      setMicError(null);
 
       if (recognitionRef.current) {
         recognitionRef.current.lang = speechLangRef.current;
         try {
           recognitionRef.current.start();
-        } catch (e) {
-          // If already started, start() throws an exception; safe to ignore
+        } catch (e: any) {
+          // If already started or audio session busy, start() throws an exception; safe to ignore
         }
       }
     } catch (err: any) {
@@ -484,14 +501,14 @@ export function AIAssistantFAB() {
       setInputValue(currentFullText);
       setLiveTranscript(currentFullText);
 
-      // Smart silence debounce timer: wait 2.2s of silence before auto-submitting in Live Voice Mode
+      // Smart silence debounce timer: wait ~2.0s of silence before auto-submitting in Live Voice Mode
       if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
       if (currentFullText.length > 0 && isLiveVoiceModeRef.current) {
         silenceTimerRef.current = setTimeout(() => {
           if (isMicActiveRef.current && currentFullText.length > 0) {
             handleSend(currentFullText);
           }
-        }, 2200);
+        }, 2000);
       }
     };
 
@@ -499,7 +516,11 @@ export function AIAssistantFAB() {
       if (event.error === 'not-allowed' || event.error === 'service-not-allowed') {
         isMicActiveRef.current = false;
         setIsListening(false);
-        setMicError('Microphone permission blocked. Please allow mic access in browser settings.');
+        setMicError(
+          speechLangRef.current === 'ml-IN'
+            ? 'മൈക്രോഫോൺ അനുമതി തടഞ്ഞിരിക്കുകയാണ്. സംസാരിക്കാൻ ബ്രൗസറിന്റെ സൈറ്റ് സെറ്റിങ്സിൽ മൈക്ക് ഓൺ ആക്കുക ട്ടോ.'
+            : 'Microphone permission blocked. Please allow mic access in browser settings.'
+        );
         return;
       }
       // 'no-speech' or 'aborted' are normal pauses during natural speaking.
@@ -515,16 +536,26 @@ export function AIAssistantFAB() {
       // If user still wants mic on and we are not speaking or querying, automatically restart immediately!
       if (isMicActiveRef.current && !isLoadingRef.current && !isSpeakingRef.current) {
         if (restartTimerRef.current) clearTimeout(restartTimerRef.current);
-        restartTimerRef.current = setTimeout(() => {
-          if (isMicActiveRef.current && !isLoadingRef.current && !isSpeakingRef.current) {
-            try {
-              recognition.start();
-              setIsListening(true);
-            } catch (err) {
-              console.warn('Recognition auto-restart caught:', err);
+
+        let retries = 4;
+        const attemptRestart = () => {
+          if (!isMicActiveRef.current || isLoadingRef.current || isSpeakingRef.current) {
+            setIsListening(false);
+            return;
+          }
+          try {
+            recognition.start();
+            setIsListening(true);
+            setMicError(null);
+          } catch (err: any) {
+            retries -= 1;
+            if (retries > 0 && isMicActiveRef.current) {
+              restartTimerRef.current = setTimeout(attemptRestart, 120);
             }
           }
-        }, 80);
+        };
+
+        restartTimerRef.current = setTimeout(attemptRestart, 80);
       } else {
         setIsListening(false);
       }
@@ -977,20 +1008,32 @@ export function AIAssistantFAB() {
                   </div>
                 )}
 
-                {/* Microphone Error Notification Banner */}
+                {/* Microphone Error Notification Banner with Retry */}
                 {micError && (
-                  <div className="mx-2.5 mt-2 flex items-center justify-between gap-2 rounded-lg bg-rose-50 border border-rose-200 px-2.5 py-1.5 text-[11px] text-rose-700">
-                    <div className="flex items-center gap-1.5">
-                      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-rose-600" />
-                      <span>{micError}</span>
+                  <div className="mx-2.5 mt-2 flex items-center justify-between gap-2 rounded-lg bg-amber-50 border border-amber-200 px-2.5 py-1.5 text-[11px] text-amber-900 shadow-xs">
+                    <div className="flex items-center gap-1.5 min-w-0">
+                      <AlertCircle className="h-3.5 w-3.5 shrink-0 text-amber-600" />
+                      <span className="truncate">{micError}</span>
                     </div>
-                    <button
-                      type="button"
-                      onClick={() => setMicError(null)}
-                      className="text-rose-500 hover:text-rose-800"
-                    >
-                      <X className="h-3 w-3" />
-                    </button>
+                    <div className="flex items-center gap-1 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setMicError(null);
+                          startListening();
+                        }}
+                        className="rounded px-2 py-0.5 text-[10px] font-medium bg-amber-200/90 hover:bg-amber-300 text-amber-950 transition-colors"
+                      >
+                        {speechLang === 'ml-IN' ? 'വീണ്ടും ശ്രമിക്കുക' : 'Retry'}
+                      </button>
+                      <button
+                        type="button"
+                        onClick={() => setMicError(null)}
+                        className="text-amber-600 hover:text-amber-900 p-0.5"
+                      >
+                        <X className="h-3 w-3" />
+                      </button>
+                    </div>
                   </div>
                 )}
 
@@ -1023,7 +1066,7 @@ export function AIAssistantFAB() {
                       }`}
                     />
 
-                    {/* Mic Button: Continuous listening with auto-reconnect */}
+                    {/* Mic Button: Continuous listening with auto-reconnect, no crossed-out icon */}
                     <motion.button
                       type="button"
                       whileTap={{ scale: 0.9 }}
@@ -1032,7 +1075,7 @@ export function AIAssistantFAB() {
                         isListening
                           ? 'bg-emerald-600 text-white shadow-md ring-2 ring-emerald-400/50 animate-pulse'
                           : micError
-                          ? 'bg-rose-50 text-rose-600 border border-rose-300'
+                          ? 'bg-amber-100 text-amber-800 border border-amber-300 hover:bg-amber-200'
                           : 'text-neutral-500 hover:bg-neutral-100 hover:text-neutral-900'
                       }`}
                       title={
@@ -1043,11 +1086,7 @@ export function AIAssistantFAB() {
                           : 'Speak message'
                       }
                     >
-                      {micError ? (
-                        <MicOff className="h-4 w-4" />
-                      ) : (
-                        <Mic className="h-4 w-4" />
-                      )}
+                      <Mic className="h-4 w-4" />
                     </motion.button>
 
                     {/* Send Button */}
